@@ -29,19 +29,16 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-        # 4. Build the image with CUDA 12.2.2!
+      # 4. Build the image with CUDA 12.2.2!
       - name: Build Docker image
         working-directory: paddle
         run: |
-          # 1. Disable tests and examples in CMake
-          sed -i 's/cmake -S . -B build -DCUDA=ON -DCMAKE_BUILD_TYPE=Release/cmake -S . -B build -DCUDA=ON -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF/g' docker/Dockerfile.cuda
+          # Inject the cxx11 ABI PyTorch wheel immediately before compiling pyharp
+          sed -i 's/cmake -S . -B build -DCUDA=ON -DCMAKE_BUILD_TYPE=Release;/python -m pip install torch==2.1.2+cu121 -f https:\/\/download.pytorch.org\/whl\/torch_stable.html; cmake -S . -B build -DCUDA=ON -DCMAKE_BUILD_TYPE=Release;/g' docker/Dockerfile.cuda
           
-          # 2. Force installation of the cxx11 ABI PyTorch wheel before building pyharp
-          sed -i 's/python -m venv \/opt\/venv/python -m venv \/opt\/venv \&\& \/opt\/venv\/bin\/pip install torch==2.1.2+cu121 -f https:\/\/download.pytorch.org\/whl\/torch_stable.html/g' docker/Dockerfile.cuda
-          
-          # 3. Build the image!
+          # Build the image!
           docker build -t paddle-cuda-12.2 -f docker/Dockerfile.cuda --build-arg CUDA_VER=12.2.2 .
-      
+          
       # 5. Save the image to a tar file
       - name: Save Docker image
         run: |
