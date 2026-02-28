@@ -33,8 +33,8 @@ jobs:
       - name: Build Docker image
         working-directory: paddle
         run: |
-          # Only build the core libraries (bypass tests and examples)
-          sed -i 's/cmake --build build --parallel "$(nproc)"/cmake --build build --target harp_release kintera_release snapy_release --parallel "$(nproc)"/g' docker/Dockerfile.cuda
+          # Physically remove the tests and examples from the CMake files of all three packages
+          sed -i 's|cmake -S . -B build|sed -i "s/add_subdirectory(examples)//g" CMakeLists.txt; sed -i "s/add_subdirectory(tests)//g" CMakeLists.txt; cmake -S . -B build|g' docker/Dockerfile.cuda
           
           # Build the image!
           docker build -t paddle-cuda-12.2 -f docker/Dockerfile.cuda --build-arg CUDA_VER=12.2.2 .
