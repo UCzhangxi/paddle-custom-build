@@ -33,7 +33,7 @@ jobs:
       - name: Build Docker image
         working-directory: paddle
         run: |
-          sed -i 's/cmake -S . -B build -DCUDA=ON -DCMAKE_BUILD_TYPE=Release/cmake -S . -B build -DCUDA=ON -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF/g' docker/Dockerfile.cuda
+          sed -i 's/cmake -S . -B build -DCUDA=ON -DCMAKE_BUILD_TYPE=Release/cmake -S . -B build -DCUDA=ON -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF/g' docker/Dockerfile.cuda
           docker build -t paddle-cuda-12.2 -f docker/Dockerfile.cuda --build-arg CUDA_VER=12.2.2 .
 
       # 5. Save the image to a tar file
