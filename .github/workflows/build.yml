@@ -33,9 +33,12 @@ jobs:
       - name: Build Docker image
         working-directory: paddle
         run: |
-          sed -i 's/cmake -S . -B build -DCUDA=ON -DCMAKE_BUILD_TYPE=Release/cmake -S . -B build -DCUDA=ON -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF/g' docker/Dockerfile.cuda
-          docker build -t paddle-cuda-12.2 -f docker/Dockerfile.cuda --build-arg CUDA_VER=12.2.2 .
+          # 1. Force the Dockerfile to install the cxx11 ABI version of PyTorch
+          sed -i 's/pip install -r \/workspace\/docker\/requirements.txt/pip install torch==2.1.2+cu121 -f https:\/\/download.pytorch.org\/whl\/torch_stable.html \&\& pip install -r \/workspace\/docker\/requirements.txt/g' docker/Dockerfile.cuda
           
+          # 2. Build the image!
+          docker build -t paddle-cuda-12.2 -f docker/Dockerfile.cuda --build-arg CUDA_VER=12.2.2 .
+      
       # 5. Save the image to a tar file
       - name: Save Docker image
         run: |
