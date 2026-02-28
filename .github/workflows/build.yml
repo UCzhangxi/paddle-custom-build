@@ -33,8 +33,8 @@ jobs:
       - name: Build Docker image
         working-directory: paddle
         run: |
-          # Inject the cxx11 ABI PyTorch wheel immediately before compiling pyharp
-          sed -i 's/cmake -S . -B build -DCUDA=ON -DCMAKE_BUILD_TYPE=Release;/python -m pip install torch==2.1.2+cu121 -f https:\/\/download.pytorch.org\/whl\/torch_stable.html; cmake -S . -B build -DCUDA=ON -DCMAKE_BUILD_TYPE=Release;/g' docker/Dockerfile.cuda
+          # Only build the core libraries (bypass tests and examples)
+          sed -i 's/cmake --build build --parallel "$(nproc)"/cmake --build build --target harp_release kintera_release snapy_release --parallel "$(nproc)"/g' docker/Dockerfile.cuda
           
           # Build the image!
           docker build -t paddle-cuda-12.2 -f docker/Dockerfile.cuda --build-arg CUDA_VER=12.2.2 .
