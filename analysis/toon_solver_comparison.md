@@ -376,7 +376,7 @@ the current pyharp flux-style implementation.
 
 ```cpp
 // New optional inputs: p_top, p_next, hard_surface (or tau_top directly)
-T tau_top = /* from pressure geometry, else 0 */;
+T tau_top = dtau[0] * p_top / (p_next - p_top);  // PICASO-style top correction
 T Btop_eff = (1.0 - exp(-tau_top / ubari)) * Btop;
 Df[0] = Btop_eff - Cmm1[0];
 
@@ -386,7 +386,7 @@ if (hard_surface) {
 } else {
   Bsurf_eff = Bsurf + B1_last * ubari;
 }
-Df[l-1] = Bsurf_eff - Cp[nlay-1] + a_surf * Cm[nlay-1];
+Df[l-1] = Bsurf_eff - Cp[nlay-1] + a_surf * Cm[nlay-1];  // l = 2*nlay
 ```
 
 #### Shortwave zero-scattering branch intent
