@@ -226,6 +226,90 @@ A reference Python implementation of the corrected solver is provided in
 
 ---
 
+## Shortwave Solver Check (pyharp vs PICASO)
+
+This section extends the same methodology to the shortwave (solar/reflected)
+Toon solver in:
+
+- **pyharp**: `src/rtsolver/toon_mckay89_shortwave_impl.h`
+- **PICASO**: `picaso/fluxes.py` (`get_reflected_1d`) + `picaso/optics.py`
+
+### What is consistent
+
+For the diffuse two-stream core (quadrature closure), pyharp is largely
+consistent with PICASO:
+
+- delta-Eddington optical-property scaling is present
+- two-stream coefficients use the same quadrature-form Toon Table 1 equations
+- tridiagonal matrix assembly follows the same rotated-layer form
+
+### Inconsistency 1 (important): zero-scattering branch drops surface reflection
+
+In pyharp, when all `w0 == 0`, the code takes a direct-beam-only shortcut:
+
+```cpp
+FLX_DN(k) = F0_in * mu * exp(-tau/mu);
+FLX_DN(nlev - 1) *= (1.0 - w_surf_in);
+for (int k = 0; k < nlev; k++) FLX_UP(k) = 0.0;
+```
+
+This removes reflected energy from downward flux at the bottom level but does
+not put it into `FLX_UP`. So energy reflected by the surface disappears.
+
+PICASO keeps the surface reflection as an explicit lower boundary source:
+
+```python
+b_surface = surf_reflect*u0*F0PI*exp(-tau[-1,:]/u0)
+```
+
+which then generates upward diffuse flux through the matrix solve.
+
+**Suggested fix in pyharp**:
+- in the zero-scattering shortcut, keep `FLX_DN` as the incoming direct beam
+- add reflected component to `FLX_UP` at the surface (or route through the same
+  boundary-condition machinery as the general branch)
+- do not absorb reflected energy by scaling only `FLX_DN(nlev-1)`
+
+### Inconsistency 2 (modeling choice): no uncorrected optical path for direct/single-scattering terms
+
+PICASO carries **both** delta-Eddington-corrected and original optical
+properties (`dtau/tau/w0/cosb` and `dtau_og/tau_og/w0_og/cosb_og`). It uses the
+uncorrected set for single-scattering source terms in reflected-light intensity
+calculation.
+
+pyharp shortwave currently applies delta-Eddington up front and then uses the
+scaled properties everywhere in this solver path.
+
+This is not always wrong for diffuse fluxes, but it is less flexible than
+PICASO’s split treatment and can bias direct/single-scattering contributions in
+forward-peaked cases.
+
+**Suggested improvement in pyharp**:
+- keep current scaled path for diffuse multiple-scattering solve
+- optionally carry original (`*_og`) optical properties for direct-beam /
+  single-scattering terms, following PICASO’s separation
+
+### Inconsistency 3 (minor): no closure toggle
+
+PICASO exposes both quadrature and Eddington Toon coefficients
+(`toon_coefficients`), while pyharp hardcodes the quadrature form.
+
+This is not a correctness bug (quadrature is PICASO default), but adding an
+optional closure mode would improve cross-model reproducibility for sensitivity
+tests.
+
+### Shortwave comparison summary
+
+| Item | pyharp shortwave | PICASO shortwave | Assessment |
+|------|------------------|------------------|------------|
+| Diffuse two-stream core (quadrature) | Implemented | Implemented | Consistent |
+| Delta-Eddington support | Implemented | Implemented | Consistent |
+| Zero-scattering + reflective surface handling | Reflected energy dropped in shortcut branch | Reflection enters lower BC source | **Inconsistent (bug)** |
+| Uncorrected optical path for direct/single terms | Not separated in this solver path | Explicit `*_og` path available | Potential inconsistency |
+| Closure options (quadrature/Eddington) | Quadrature only | Toggle available | Minor capability gap |
+
+---
+
 ## Reference
 
 Toon, O. B., McKay, C. P., Ackerman, T. P., & Santhanam, K. (1989).
