@@ -226,6 +226,210 @@ A reference Python implementation of the corrected solver is provided in
 
 ---
 
+## Shortwave Solver Check (pyharp vs PICASO)
+
+This section extends the same methodology to the shortwave (solar/reflection)
+Toon solver in:
+
+- **pyharp**: `src/rtsolver/toon_mckay89_shortwave_impl.h`
+- **PICASO**: `picaso/fluxes.py` (`get_reflected_1d`) + `picaso/optics.py`
+
+### What is consistent
+
+For the diffuse two-stream core (quadrature closure), pyharp is largely
+consistent with PICASO:
+
+- delta-Eddington optical-property scaling is present
+- two-stream coefficients use the same quadrature-form Toon Table 1 equations
+- tridiagonal matrix assembly follows the same rotated-layer form
+
+### Inconsistency 1 (important): zero-scattering branch drops surface reflection
+
+In pyharp, when all `w0 == 0`, the code takes a direct-beam-only shortcut:
+
+```cpp
+FLX_DN(k) = F0_in * mu * exp(-tau/mu);
+FLX_DN(nlev - 1) *= (1.0 - w_surf_in);
+for (int k = 0; k < nlev; k++) FLX_UP(k) = 0.0;
+```
+
+This removes reflected energy from downward flux at the bottom level but does
+not put it into `FLX_UP`. So energy reflected by the surface disappears,
+creating an energy-conservation error that scales with surface albedo and
+incident direct-beam flux.
+
+PICASO keeps the surface reflection as an explicit lower boundary source:
+
+```python
+b_surface = surf_reflect*u0*F0PI*exp(-tau[-1,:]/u0)
+```
+
+which then generates upward diffuse flux through the matrix solve.
+
+**Suggested fix in pyharp**:
+- in the zero-scattering shortcut, keep `FLX_DN` as the incoming direct beam
+- add reflected component to `FLX_UP` at the surface (or route through the same
+  boundary-condition machinery as the general branch)
+- do not absorb reflected energy by scaling only `FLX_DN(nlev-1)`
+
+### Inconsistency 2 (modeling choice): corrected optical path used exclusively for this solver path
+
+PICASO carries **both** delta-Eddington-corrected and original optical
+properties (`dtau/tau/w0/cosb` and `dtau_og/tau_og/w0_og/cosb_og`). It uses the
+uncorrected set for single-scattering source terms in reflected-light intensity
+calculation.
+
+pyharp shortwave currently applies delta-Eddington up front and then uses the
+scaled properties everywhere in this solver path.
+
+This is not always wrong for diffuse fluxes, but it is less flexible than
+PICASO’s split treatment and can bias direct/single-scattering contributions in
+forward-peaked cases.
+
+**Suggested improvement in pyharp**:
+- keep current scaled path for diffuse multiple-scattering solve
+- optionally carry original (`*_og`) optical properties for direct-beam /
+  single-scattering terms, following PICASO’s separation
+
+### Inconsistency 3 (minor): no closure toggle
+
+PICASO exposes both quadrature and Eddington Toon coefficients
+(`toon_coefficients`), while pyharp hardcodes the quadrature form.
+
+This is not a correctness bug (quadrature is PICASO default), but adding an
+optional closure mode would improve cross-model reproducibility for sensitivity
+tests.
+
+### Shortwave comparison summary
+
+| Item | pyharp shortwave | PICASO shortwave | Assessment |
+|------|------------------|------------------|------------|
+| Diffuse two-stream core (quadrature) | Implemented | Implemented | Consistent |
+| Delta-Eddington support | Implemented | Implemented | Consistent |
+| Zero-scattering + reflective surface handling | Reflected energy dropped in shortcut branch | Reflection enters lower BC source | **Inconsistent (bug)** |
+| Uncorrected optical path for direct/single terms | Not separated in this solver path | Explicit `*_og` path available | Potential inconsistency |
+| Closure options (quadrature/Eddington) | Quadrature only | Toggle available | Minor capability gap |
+
+---
+
+## Minimal Necessary pyharp Changes for Full PICASO Parity (Longwave + Shortwave)
+
+This is the **minimal** safe change set if the target is numerical consistency
+with PICASO Toon solvers, including boundary treatment.
+
+### A. What was verified outside PICASO solver kernels (important)
+
+To avoid copying behavior that actually comes from upstream preprocessing, the
+following PICASO pipeline pieces were checked:
+
+- `picaso/optics.py::compute_opacity`
+  - computes both delta-Eddington-corrected (`dtau, tau, w0, cosb`) and
+    original (`dtau_og, tau_og, w0_og, cosb_og`) optical properties.
+- `picaso/justdoit.py`
+  - passes corrected properties to reflected-light two-stream core;
+  - passes original/no-raman properties to thermal solver;
+  - passes both corrected and original sets to reflected solver because
+    single-scattering source terms use original properties.
+
+**Implication for pyharp changes:**  
+For solver-level flux parity, you do **not** need to replicate all PICASO
+upstream chemistry/opacity machinery. You only need the same optical-property
+choice at each solver call and the same boundary conditions.
+
+### B. Minimal pyharp code changes
+
+#### 1) Longwave (`toon_mckay89_longwave_impl.h`)
+
+1. Keep/remove delta-Eddington exactly as already concluded:
+   - no delta-Eddington in longwave path;
+   - use original `w0`, `dtau`, `g`.
+2. Add TOA finite-optical-depth boundary option:
+   - replace hard `Btop` usage with
+     `Btop_eff = (1 - exp(-tau_top / ubari)) * Btop`,
+     where `tau_top = dtau[0] * p_top / (p_1 - p_top)`.
+   - if pressure metadata is unavailable, keep `tau_top=0` default path
+     (compatibility mode), but expose input for parity mode.
+3. Add PICASO-consistent lower thermal boundary:
+   - gas-giant/non-hard-surface mode:
+     `Bsurf_eff = Bsurf + B1_last * ubari`.
+   - hard-surface mode:
+     `Bsurf_eff = (1 - a_surf) * Bsurf`.
+   - use `Bsurf_eff` in the last-row RHS.
+
+These three items are sufficient for longwave parity at solver level.
+
+#### 2) Shortwave (`toon_mckay89_shortwave_impl.h`)
+
+1. Fix `all_zero_w` shortcut branch to conserve reflected energy:
+   - do **not** attenuate `FLX_DN(nlev-1)` by `(1 - w_surf_in)` as a sink;
+   - set `FLX_UP(nlev-1)` to reflected direct beam:
+     `w_surf_in * FLX_DN(nlev-1)` (using incoming direct beam before any sink);
+   - keep `FLX_UP(k)=0` for upper levels in this no-scattering branch.
+2. Keep existing general two-stream branch unchanged (already aligned in form).
+
+This is the only shortwave bug fix required for boundary-consistent parity in
+the current pyharp flux-style implementation.
+
+### C. Exact patch intent (pyharp-side) in compact form
+
+#### Longwave BC intent
+
+```cpp
+// New optional inputs: p_top, p_next, hard_surface (or tau_top directly)
+T tau_top = dtau[0] * p_top / (p_next - p_top);  // PICASO-style top correction
+T Btop_eff = (1.0 - exp(-tau_top / ubari)) * Btop;
+Df[0] = Btop_eff - Cmm1[0];
+
+T Bsurf_eff;
+if (hard_surface) {
+  Bsurf_eff = (1.0 - a_surf) * Bsurf;
+} else {
+  Bsurf_eff = Bsurf + B1_last * ubari;
+}
+Df[l-1] = Bsurf_eff - Cp[nlay-1] + a_surf * Cm[nlay-1];  // l = 2*nlay
+```
+
+#### Shortwave zero-scattering branch intent
+
+```cpp
+// Keep direct beam as downwelling
+for (int k = 0; k < nlev; ++k) FLX_DN(k) = Fdir(k);
+for (int k = 0; k < nlev; ++k) FLX_UP(k) = 0.0;
+FLX_UP(nlev - 1) = w_surf_in * FLX_DN(nlev - 1);
+```
+
+### D. Careful validation plan (what to test before/after pyharp edits)
+
+Run these as regression cases in pyharp after patching:
+
+1. **Longwave, pure absorption, thin TOA**
+   - expect top downwelling flux to follow finite-`tau_top` boundary
+     (near zero when `tau_top << 1`).
+2. **Longwave, non-hard-surface**
+   - verify bottom upwelling differs by expected `B1_last * ubari` term.
+3. **Longwave, hard-surface**
+   - verify emissivity scaling `(1-a_surf)` at lower boundary.
+4. **Shortwave, all-zero-SSA with reflective surface**
+   - confirm energy conservation:
+     reflected power appears in `FLX_UP(surface)` and is no longer lost.
+5. **Shortwave, scattering atmosphere**
+   - ensure no regressions in general branch outputs.
+
+Recommended numerical tolerances against PICASO for matched inputs:
+
+- layer/interface fluxes: relative error `<= 1e-5` (or absolute `<= 1e-8`
+  where fluxes are tiny),
+- net flux residual (energy closure): `<= 1e-6` of incident flux scale.
+
+### E. What is intentionally *not* required for minimal parity
+
+- Reproducing PICASO chemistry/opacity table generation internals.
+- Reproducing Raman/correlated-k plumbing outside solver calls.
+- Adding Eddington-closure toggle (useful, but not required for default-parity
+  target because PICASO default reflected Toon path is quadrature).
+
+---
+
 ## Reference
 
 Toon, O. B., McKay, C. P., Ackerman, T. P., & Santhanam, K. (1989).
