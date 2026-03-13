@@ -228,7 +228,7 @@ A reference Python implementation of the corrected solver is provided in
 
 ## Shortwave Solver Check (pyharp vs PICASO)
 
-This section extends the same methodology to the shortwave (solar/reflected)
+This section extends the same methodology to the shortwave (solar/reflection)
 Toon solver in:
 
 - **pyharp**: `src/rtsolver/toon_mckay89_shortwave_impl.h`
@@ -254,7 +254,9 @@ for (int k = 0; k < nlev; k++) FLX_UP(k) = 0.0;
 ```
 
 This removes reflected energy from downward flux at the bottom level but does
-not put it into `FLX_UP`. So energy reflected by the surface disappears.
+not put it into `FLX_UP`. So energy reflected by the surface disappears,
+creating an energy-conservation error that scales with surface albedo and
+incident direct-beam flux.
 
 PICASO keeps the surface reflection as an explicit lower boundary source:
 
@@ -270,7 +272,7 @@ which then generates upward diffuse flux through the matrix solve.
   boundary-condition machinery as the general branch)
 - do not absorb reflected energy by scaling only `FLX_DN(nlev-1)`
 
-### Inconsistency 2 (modeling choice): no uncorrected optical path for direct/single-scattering terms
+### Inconsistency 2 (modeling choice): corrected optical path used exclusively for this solver path
 
 PICASO carries **both** delta-Eddington-corrected and original optical
 properties (`dtau/tau/w0/cosb` and `dtau_og/tau_og/w0_og/cosb_og`). It uses the
